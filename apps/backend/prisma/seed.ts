@@ -95,11 +95,27 @@ async function main() {
     },
   });
 
-  const alias = await prisma.breedAliasDictionary.upsert({
-    where: { alias: 'rosa' },
-    update: { canonicalBreedKey: 'rosa', displayGroupColumn: 'Rosa', isActive: true },
-    create: { alias: 'rosa', canonicalBreedKey: 'rosa', displayGroupColumn: 'Rosa', isActive: true },
-  });
+  const aliasSeed = [
+    { alias: 'rosa', canonicalBreedKey: 'rosa', displayGroupColumn: 'Rosa' },
+    { alias: 'r', canonicalBreedKey: 'rosa', displayGroupColumn: 'Rosa' },
+    { alias: 'kog', canonicalBreedKey: 'kogut', displayGroupColumn: 'Kogut' },
+    { alias: 'kogut', canonicalBreedKey: 'kogut', displayGroupColumn: 'Kogut' },
+    { alias: 'legh', canonicalBreedKey: 'leghorn', displayGroupColumn: 'Leghorn' },
+    { alias: 'leghorn', canonicalBreedKey: 'leghorn', displayGroupColumn: 'Leghorn' },
+    { alias: 'sandy', canonicalBreedKey: 'sandy', displayGroupColumn: 'Sandy' },
+    { alias: 'astra', canonicalBreedKey: 'astra', displayGroupColumn: 'Astra' },
+    { alias: 'stara', canonicalBreedKey: 'stara', displayGroupColumn: 'Stara' },
+  ];
+
+  for (const aliasEntry of aliasSeed) {
+    await prisma.breedAliasDictionary.upsert({
+      where: { alias: aliasEntry.alias },
+      update: { canonicalBreedKey: aliasEntry.canonicalBreedKey, displayGroupColumn: aliasEntry.displayGroupColumn, isActive: true },
+      create: { ...aliasEntry, isActive: true },
+    });
+  }
+
+  const alias = await prisma.breedAliasDictionary.findUniqueOrThrow({ where: { alias: 'rosa' } });
 
   const order = await prisma.order.create({
     data: {
