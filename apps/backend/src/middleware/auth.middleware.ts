@@ -1,6 +1,6 @@
 import { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
-import { Role } from '@prisma/client';
+import { UserRole } from '@prisma/client';
 import { env } from '../config/env.js';
 import { AuthTokenPayload } from '../modules/auth/auth.types.js';
 
@@ -23,7 +23,7 @@ export function requireAuth(req: AuthenticatedRequest, res: Response, next: Next
   }
 }
 
-export function requireRole(...roles: Role[]) {
+export function requireRole(...roles: UserRole[]) {
   return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     if (!req.user) {
       return res.status(401).json({ message: 'Unauthorized' });

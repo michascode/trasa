@@ -7,21 +7,427 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum Role {
+enum UserRole {
   ADMIN
   MANAGER
   VIEWER
 }
 
-model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
-  passwordHash String
-  role         Role     @default(VIEWER)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+enum PlanningWeekStatus {
+  DRAFT
+  PLANNED
+  FROZEN
+  ARCHIVED
+}
 
-  jobs         OptimizationJob[]
+enum ImportBatchStatus {
+  UPLOADED
+  PARSED
+  VALIDATED
+  FAILED
+}
+
+enum RawImportRowStatus {
+  OK
+  WARNING
+  ERROR
+  CORRECTED
+  REJECTED
+}
+
+enum OrderStatus {
+  NEW
+  OK
+  MOVED
+  PLANNED
+  UNPLANNED
+  CONFLICT
+  CANCELLED
+}
+
+enum RoutePlanStatus {
+  DRAFT
+  AUTO_PLANNED
+  MANUAL_EDITED
+  APPROVED
+  CANCELLED
+}
+
+enum RouteFeasibilityStatus {
+  FEASIBLE
+  WARNING
+  INFEASIBLE
+}
+
+enum RouteStopType {
+  DELIVERY
+  BREAK
+  OVERNIGHT
+  DEPOT
+  TECHNICAL
+}
+
+enum RouteManualEditAction {
+  MOVE_ORDER
+  RESEQUENCE_STOP
+  ADD_STOP
+  REMOVE_STOP
+  UPDATE_METRICS
+  REASSIGN_DRIVER
+}
+
+enum FuelPriceSource {
+  MANUAL
+  API
+}
+
+model Role {
+  id          String               @id @default(cuid())
+  code        String               @unique
+  name        String
+  description String?
+  isSystem    Boolean              @default(true)
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+  users       UserRoleAssignment[]
+}
+
+model User {
+  id              String                @id @default(cuid())
+  email           String                @unique
+  passwordHash    String
+  role            UserRole              @default(VIEWER)
+  isActive        Boolean               @default(true)
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  jobs            OptimizationJob[]
+  roleAssignments UserRoleAssignment[]
+  createdWeeks    PlanningWeek[]        @relation("PlanningWeekCreatedBy")
+  frozenWeeks     PlanningWeek[]        @relation("PlanningWeekFrozenBy")
+  importBatches   OrderImportBatch[]    @relation("OrderImportBatchImportedBy")
+  routeEdits      RouteManualEditLog[]
+  fuelPriceEdits  FuelPriceSetting[]
+  settingChanges  SystemSetting[]
+}
+
+model UserRoleAssignment {
+  id        String   @id @default(cuid())
+  userId    String
+  roleId    String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+}
+
+model Driver {
+  id               String                     @id @default(cuid())
+  code             String                     @unique
+  name             String
+  isActive         Boolean                    @default(true)
+  defaultVehicleId String?
+  createdAt        DateTime                   @default(now())
+  updatedAt        DateTime                   @updatedAt
+  defaultVehicle   Vehicle?                   @relation("DriverDefaultVehicle", fields: [defaultVehicleId], references: [id], onDelete: SetNull)
+  routePlans       RoutePlan[]
+  availabilities   DriverWeeklyAvailability[]
+}
+
+model Vehicle {
+  id                          String   @id @default(cuid())
+  code                        String   @unique
+  name                        String
+  capacityUnits               Int      @default(1800)
+  fuelConsumptionLPer100Km    Decimal? @db.Decimal(8, 3)
+  isActive                    Boolean  @default(true)
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+  defaultForDrivers           Driver[] @relation("DriverDefaultVehicle")
+  routePlans                  RoutePlan[]
+}
+
+model PlanningWeek {
+  id                String                  @id @default(cuid())
+  weekStartDate     DateTime                @db.Date
+  version           Int                     @default(1)
+  isCurrentVersion  Boolean                 @default(true)
+  status            PlanningWeekStatus      @default(DRAFT)
+  versionNotes      String?
+  previousVersionId String?
+  createdById       String?
+  frozenById        String?
+  frozenAt          DateTime?
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+  previousVersion   PlanningWeek?           @relation("PlanningWeekVersion", fields: [previousVersionId], references: [id], onDelete: SetNull)
+  nextVersions      PlanningWeek[]          @relation("PlanningWeekVersion")
+  createdBy         User?                   @relation("PlanningWeekCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  frozenBy          User?                   @relation("PlanningWeekFrozenBy", fields: [frozenById], references: [id], onDelete: SetNull)
+  driverAvailability DriverWeeklyAvailability[]
+  importBatches     OrderImportBatch[]
+  ordersCurrent     Order[]                 @relation("OrderCurrentPlanningWeek")
+  routePlans        RoutePlan[]
+
+  @@unique([weekStartDate, version])
+  @@index([weekStartDate, isCurrentVersion])
+}
+
+model DriverWeeklyAvailability {
+  id                String      @id @default(cuid())
+  planningWeekId    String
+  driverId          String
+  workDaysCount     Int
+  allowedWeekdays   Int[]
+  unavailableReason String?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  planningWeek PlanningWeek @relation(fields: [planningWeekId], references: [id], onDelete: Cascade)
+  driver       Driver       @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  @@unique([planningWeekId, driverId])
+}
+
+model OrderImportBatch {
+  id             String            @id @default(cuid())
+  planningWeekId String
+  sourceFilename String
+  sourceHash     String
+  importedById   String?
+  importedAt     DateTime          @default(now())
+  totalRows      Int               @default(0)
+  successRows    Int               @default(0)
+  errorRows      Int               @default(0)
+  status         ImportBatchStatus @default(UPLOADED)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  planningWeek PlanningWeek          @relation(fields: [planningWeekId], references: [id], onDelete: Cascade)
+  importedBy   User?                 @relation("OrderImportBatchImportedBy", fields: [importedById], references: [id], onDelete: SetNull)
+  rawRows      RawImportedOrderRow[]
+
+  @@index([planningWeekId, importedAt])
+}
+
+model RawImportedOrderRow {
+  id                   String             @id @default(cuid())
+  importBatchId        String
+  rowNumber            Int
+  rawCellsJson         Json
+  rawOrderText         String
+  parseStatus          RawImportRowStatus @default(OK)
+  parseErrorsJson      Json?
+  normalizedOrderId    String?
+  correctedByUserId    String?
+  correctionNotes      String?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  importBatch      OrderImportBatch @relation(fields: [importBatchId], references: [id], onDelete: Cascade)
+  normalizedOrder  Order?           @relation(fields: [normalizedOrderId], references: [id], onDelete: SetNull)
+
+  @@unique([importBatchId, rowNumber])
+  @@index([normalizedOrderId])
+}
+
+model Order {
+  id                   String        @id @default(cuid())
+  currentPlanningWeekId String
+  externalRef          String?
+  rawOrderText         String
+  postalCode           String?
+  addressLine          String?
+  phone                String?
+  notes                String?
+  orderedGoodsText     String?
+  numberingText        String?
+  status               OrderStatus    @default(NEW)
+  geoLat               Decimal?       @db.Decimal(10, 7)
+  geoLng               Decimal?       @db.Decimal(10, 7)
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  currentPlanningWeek PlanningWeek          @relation("OrderCurrentPlanningWeek", fields: [currentPlanningWeekId], references: [id], onDelete: Restrict)
+  orderItems          OrderBreedQuantity[]
+  rawImportRows       RawImportedOrderRow[]
+  routeStops          RouteStop[]
+  weekAssignments     OrderWeekAssignment[]
+
+  @@index([currentPlanningWeekId, status])
+}
+
+model OrderWeekAssignment {
+  id             String   @id @default(cuid())
+  orderId        String
+  planningWeekId String
+  assignedAt     DateTime @default(now())
+  unassignedAt   DateTime?
+  transferReason String?
+  isCurrent      Boolean  @default(true)
+
+  order        Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  planningWeek PlanningWeek @relation(fields: [planningWeekId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, isCurrent])
+  @@index([planningWeekId, isCurrent])
+}
+
+model BreedAliasDictionary {
+  id                   String   @id @default(cuid())
+  alias                String   @unique
+  canonicalBreedKey    String
+  displayGroupColumn   String?
+  isActive             Boolean  @default(true)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  orderItems           OrderBreedQuantity[]
+}
+
+model OrderBreedQuantity {
+  id              String   @id @default(cuid())
+  orderId         String
+  canonicalBreedKey String
+  sourceLabel     String?
+  units           Int
+  breedAliasId    String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  order      Order                 @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  breedAlias BreedAliasDictionary? @relation(fields: [breedAliasId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+  @@index([canonicalBreedKey])
+}
+
+model RoutePlan {
+  id                   String                 @id @default(cuid())
+  planningWeekId       String
+  driverId             String
+  vehicleId            String?
+  status               RoutePlanStatus        @default(DRAFT)
+  totalKm              Decimal                @default(0) @db.Decimal(10, 2)
+  totalDurationMin     Int                    @default(0)
+  totalFuelCost        Decimal                @default(0) @db.Decimal(12, 2)
+  totalStops           Int                    @default(0)
+  totalLoadUnits       Int                    @default(0)
+  overnightCount       Int                    @default(0)
+  feasibilityStatus    RouteFeasibilityStatus @default(FEASIBLE)
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+
+  planningWeek PlanningWeek          @relation(fields: [planningWeekId], references: [id], onDelete: Cascade)
+  driver       Driver                @relation(fields: [driverId], references: [id], onDelete: Restrict)
+  vehicle      Vehicle?              @relation(fields: [vehicleId], references: [id], onDelete: SetNull)
+  routeDays    RouteDay[]
+  manualEdits  RouteManualEditLog[]
+  externalLinks ExternalRouteLink[]
+
+  @@unique([planningWeekId, driverId])
+}
+
+model RouteDay {
+  id                String   @id @default(cuid())
+  routePlanId       String
+  serviceDate       DateTime @db.Date
+  dayIndex          Int
+  status            RoutePlanStatus @default(DRAFT)
+  km                Decimal  @default(0) @db.Decimal(10, 2)
+  durationMin       Int      @default(0)
+  stopCount         Int      @default(0)
+  loadUnits         Int      @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  routePlan RoutePlan  @relation(fields: [routePlanId], references: [id], onDelete: Cascade)
+  stops     RouteStop[]
+
+  @@unique([routePlanId, dayIndex])
+  @@unique([routePlanId, serviceDate])
+}
+
+model RouteStop {
+  id                String       @id @default(cuid())
+  routeDayId        String
+  sequenceNo        Int
+  orderId           String?
+  stopType          RouteStopType @default(DELIVERY)
+  arrivalTime       DateTime?
+  departureTime     DateTime?
+  plannedUnits      Int          @default(0)
+  distanceFromPrevKm Decimal     @default(0) @db.Decimal(10, 2)
+  durationFromPrevMin Int        @default(0)
+  notes             String?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  routeDay RouteDay @relation(fields: [routeDayId], references: [id], onDelete: Cascade)
+  order    Order?   @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@unique([routeDayId, sequenceNo])
+}
+
+model RouteManualEditLog {
+  id                String                @id @default(cuid())
+  routePlanId       String
+  routeDayId        String?
+  routeStopId       String?
+  actorUserId       String?
+  actionType        RouteManualEditAction
+  reason            String?
+  beforeJson        Json
+  afterJson         Json
+  createdAt         DateTime              @default(now())
+
+  routePlan RoutePlan @relation(fields: [routePlanId], references: [id], onDelete: Cascade)
+  routeDay  RouteDay? @relation(fields: [routeDayId], references: [id], onDelete: SetNull)
+  actorUser User?     @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+}
+
+model ExternalRouteLink {
+  id              String   @id @default(cuid())
+  routePlanId     String
+  provider        String
+  externalRouteId String
+  routeUrl        String?
+  payloadJson     Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  routePlan RoutePlan @relation(fields: [routePlanId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, externalRouteId])
+}
+
+model FuelPriceSetting {
+  id             String          @id @default(cuid())
+  effectiveFrom  DateTime        @db.Date
+  pricePerLiter  Decimal         @db.Decimal(10, 3)
+  currency       String          @default("PLN")
+  source         FuelPriceSource @default(MANUAL)
+  updatedById    String?
+  notes          String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  updatedBy User? @relation(fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@unique([effectiveFrom, currency])
+}
+
+model SystemSetting {
+  id              String   @id @default(cuid())
+  settingKey      String   @unique
+  settingValue    Json
+  valueType       String
+  description     String?
+  updatedById     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  updatedBy User? @relation(fields: [updatedById], references: [id], onDelete: SetNull)
 }
 
 model OptimizationJob {

@@ -1,4 +1,4 @@
-import { Role } from '@prisma/client';
+import { UserRole } from '@prisma/client';
 import { Router } from 'express';
 import { z } from 'zod';
 import { requireAuth, AuthenticatedRequest } from '../../middleware/auth.middleware.js';
@@ -9,7 +9,7 @@ const router = Router();
 const registerSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8),
-  role: z.nativeEnum(Role).optional(),
+  role: z.nativeEnum(UserRole).optional(),
 });
 
 const loginSchema = z.object({
