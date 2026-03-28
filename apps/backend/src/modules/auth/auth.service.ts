@@ -1,11 +1,11 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { Role } from '@prisma/client';
+import { UserRole } from '@prisma/client';
 import { env } from '../../config/env.js';
 import { prisma } from '../../db/prisma.js';
 import { AuthTokenPayload } from './auth.types.js';
 
-export async function registerUser(email: string, password: string, role: Role = Role.VIEWER) {
+export async function registerUser(email: string, password: string, role: UserRole = UserRole.VIEWER) {
   const passwordHash = await bcrypt.hash(password, 10);
   return prisma.user.create({
     data: { email, passwordHash, role },

@@ -1,7 +1,7 @@
-import { Role } from '@prisma/client';
+import { UserRole } from '@prisma/client';
 
 export type AuthTokenPayload = {
   sub: string;
-  role: Role;
+  role: UserRole;
   email: string;
 };
