@@ -12,6 +12,31 @@ type Week = {
   orders: WeekOrder[];
 };
 
+
+type OptimizerScenario = {
+  id: string;
+  name: string;
+  description: string;
+  precheck: { totalOrders: number; totalUnits: number; totalWorkDays: number };
+};
+
+type OptimizationResponse = {
+  status: 'FEASIBLE' | 'PARTIAL' | 'INFEASIBLE';
+  report: {
+    precheck: {
+      totalOrders: number;
+      totalUnits: number;
+      totalWorkDays: number;
+      totalVehicleCapacityPerDay: number;
+      totalWeeklyCapacity: number;
+    };
+    conflicts: Array<{ orderId?: string; code: string; reason: string }>;
+    unassignedOrderIds: string[];
+    objectiveBreakdown: { totalKm: number; totalDurationMin: number; totalFuelCost: number; score: number };
+    notes: string[];
+  };
+};
+
 type WeekDetails = Week & {
   availableDrivers: Driver[];
   availableOrders: Order[];
@@ -28,6 +53,9 @@ export function PlanningPage() {
   const [workDays, setWorkDays] = useState(5);
   const [selectedOrders, setSelectedOrders] = useState<string[]>([]);
   const [transferOrders, setTransferOrders] = useState<string[]>([]);
+  const [optimizerScenarios, setOptimizerScenarios] = useState<OptimizerScenario[]>([]);
+  const [selectedScenarioId, setSelectedScenarioId] = useState<string>('');
+  const [optimizationResult, setOptimizationResult] = useState<OptimizationResponse | null>(null);
 
   async function loadWeeks(preferredWeekId?: string) {
     const response = await fetch('/api/planning/weeks');
@@ -48,8 +76,16 @@ export function PlanningPage() {
     setSelectedOrders(details.orders.map((order) => order.orderId));
   }
 
+  async function loadOptimizerScenarios() {
+    const response = await fetch('/api/optimizer/scenarios');
+    const scenarios: OptimizerScenario[] = await response.json();
+    setOptimizerScenarios(scenarios);
+    setSelectedScenarioId(scenarios[0]?.id ?? '');
+  }
+
   useEffect(() => {
     void loadWeeks();
+    void loadOptimizerScenarios();
   }, []);
 
   const previousWeekOrders = useMemo(() => {
@@ -126,6 +162,22 @@ export function PlanningPage() {
     await loadWeeks(weekDetails.id);
   }
 
+
+  async function runOptimizerScenario() {
+    if (!selectedScenarioId) return;
+    const scenarioResponse = await fetch(`/api/optimizer/scenarios/${selectedScenarioId}`);
+    const scenario = await scenarioResponse.json();
+
+    const response = await fetch('/api/optimizer/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(scenario.input),
+    });
+
+    const result: OptimizationResponse = await response.json();
+    setOptimizationResult(result);
+  }
+
   async function archiveWeek() {
     if (!weekDetails) return;
     await fetch(`/api/planning/weeks/${weekDetails.id}/archive`, { method: 'POST' });
@@ -145,6 +197,57 @@ export function PlanningPage() {
       </form>
 
       <div className="planning-grid">
+
+      <article className="optimizer-panel">
+        <h2>Silnik układania tras (VRP)</h2>
+        <p>Przed uruchomieniem optymalizacji widzisz sumę ilości towarów i dni pracy kierowców.</p>
+        <div className="inline-controls">
+          <select value={selectedScenarioId} onChange={(event) => setSelectedScenarioId(event.target.value)}>
+            {optimizerScenarios.map((scenario) => (
+              <option key={scenario.id} value={scenario.id}>
+                {scenario.name}
+              </option>
+            ))}
+          </select>
+          <button type="button" onClick={() => void runOptimizerScenario()} disabled={!selectedScenarioId}>
+            Uruchom optymalizację
+          </button>
+        </div>
+
+        {selectedScenarioId && (
+          <div>
+            {optimizerScenarios
+              .filter((scenario) => scenario.id === selectedScenarioId)
+              .map((scenario) => (
+                <p key={scenario.id}>
+                  Wejście: zamówienia {scenario.precheck.totalOrders}, ładunek {scenario.precheck.totalUnits} j., dni pracy {scenario.precheck.totalWorkDays}.
+                </p>
+              ))}
+          </div>
+        )}
+
+        {optimizationResult && (
+          <div className="optimizer-report">
+            <h3>Raport optymalizacji: {optimizationResult.status}</h3>
+            <p>
+              Suma wejścia: {optimizationResult.report.precheck.totalOrders} zamówień, {optimizationResult.report.precheck.totalUnits} jednostek,
+              tygodniowa pojemność {optimizationResult.report.precheck.totalWeeklyCapacity}.
+            </p>
+            <p>
+              Cel: {optimizationResult.report.objectiveBreakdown.totalKm} km, {optimizationResult.report.objectiveBreakdown.totalDurationMin} min,
+              koszt paliwa {optimizationResult.report.objectiveBreakdown.totalFuelCost} PLN, score {optimizationResult.report.objectiveBreakdown.score}.
+            </p>
+            <p>Niezaplanowane zamówienia: {optimizationResult.report.unassignedOrderIds.join(', ') || 'brak'}.</p>
+            <ul>
+              {optimizationResult.report.conflicts.map((conflict, idx) => (
+                <li key={`${conflict.code}-${idx}`}>
+                  [{conflict.code}] {conflict.reason}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </article>
         <article>
           <h2>Lista tygodni</h2>
           <ul className="week-list">

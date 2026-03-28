@@ -120,3 +120,11 @@ body {
   gap: 0.35rem;
   margin-bottom: 0.5rem;
 }
+
+.optimizer-panel,
+.optimizer-report {
+  border: 1px solid #dbeafe;
+  background: #f8fbff;
+  border-radius: 8px;
+  padding: 0.9rem;
+}
