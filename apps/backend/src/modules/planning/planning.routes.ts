@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import {
+  applyManualEdit,
   archivePlanningWeek,
   assignDriverToWeek,
   createPlanningWeek,
@@ -33,6 +34,63 @@ const ordersSchema = z.object({
 const orderStatusSchema = z.object({
   status: z.enum(['unassigned', 'planned', 'conflict', 'moved', 'skipped']),
 });
+
+const manualEditSchema = z.discriminatedUnion('action', [
+  z.object({
+    action: z.literal('MOVE_ORDER'),
+    actor: z.string().min(1),
+    orderId: z.string().min(1),
+    fromDriverId: z.string().min(1),
+    fromDay: z.number().int().min(1).max(7),
+    toDriverId: z.string().min(1),
+    toDay: z.number().int().min(1).max(7),
+    toSequence: z.number().int().min(1).optional(),
+    reason: z.string().optional(),
+  }),
+  z.object({
+    action: z.literal('MOVE_DAY'),
+    actor: z.string().min(1),
+    orderId: z.string().min(1),
+    driverId: z.string().min(1),
+    fromDay: z.number().int().min(1).max(7),
+    toDay: z.number().int().min(1).max(7),
+    toSequence: z.number().int().min(1).optional(),
+    reason: z.string().optional(),
+  }),
+  z.object({
+    action: z.literal('RESEQUENCE_STOP'),
+    actor: z.string().min(1),
+    driverId: z.string().min(1),
+    day: z.number().int().min(1).max(7),
+    stopId: z.string().min(1),
+    toSequence: z.number().int().min(1),
+    reason: z.string().optional(),
+  }),
+  z.object({
+    action: z.literal('REMOVE_STOP'),
+    actor: z.string().min(1),
+    driverId: z.string().min(1),
+    day: z.number().int().min(1).max(7),
+    stopId: z.string().min(1),
+    reason: z.string().optional(),
+  }),
+  z.object({
+    action: z.literal('ADD_STOP'),
+    actor: z.string().min(1),
+    driverId: z.string().min(1),
+    day: z.number().int().min(1).max(7),
+    orderId: z.string().min(1),
+    toSequence: z.number().int().min(1).optional(),
+    reason: z.string().optional(),
+  }),
+  z.object({
+    action: z.literal('UPDATE_EXTERNAL_LINK'),
+    actor: z.string().min(1),
+    driverId: z.string().min(1),
+    externalRouteLink: z.string().url(),
+    reason: z.string().optional(),
+  }),
+]);
 
 const router = Router();
 
@@ -105,6 +163,15 @@ router.post('/weeks/:weekId/orders/transfer', (req, res, next) => {
   try {
     const payload = ordersSchema.parse(req.body);
     res.json(transferOrdersFromPreviousWeek(req.params.weekId, payload.orderIds));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/weeks/:weekId/manual-edit', (req, res, next) => {
+  try {
+    const payload = manualEditSchema.parse(req.body);
+    res.json(applyManualEdit(req.params.weekId, payload));
   } catch (error) {
     next(error);
   }
