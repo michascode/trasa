@@ -23,11 +23,11 @@ const seededDrivers = [
 ];
 
 const seededOrders = [
-  { id: 'ord-1', label: 'ORD-1 | Wrocław | 120 szt.', units: 120, lat: 51.1079, lng: 17.0385 },
-  { id: 'ord-2', label: 'ORD-2 | Zielona Góra | 85 szt.', units: 85, lat: 51.9356, lng: 15.5062 },
-  { id: 'ord-3', label: 'ORD-3 | Poznań | 62 szt.', units: 62, lat: 52.4064, lng: 16.9252 },
-  { id: 'ord-4', label: 'ORD-4 | Legnica | 91 szt.', units: 91, lat: 51.207, lng: 16.155 },
-  { id: 'ord-5', label: 'ORD-5 | Opole | 40 szt.', units: 40, lat: 50.6751, lng: 17.9213 },
+  { id: 'ord-1', label: 'ORD-1 | Wrocław | 120 szt.', units: 120, lat: 51.1079, lng: 17.0385, breedUnits: { Rosa: 70, Leghorn: 50 } },
+  { id: 'ord-2', label: 'ORD-2 | Zielona Góra | 85 szt.', units: 85, lat: 51.9356, lng: 15.5062, breedUnits: { Sandy: 45, Astra: 40 } },
+  { id: 'ord-3', label: 'ORD-3 | Poznań | 62 szt.', units: 62, lat: 52.4064, lng: 16.9252, breedUnits: { Rosa: 25, Kogut: 37 } },
+  { id: 'ord-4', label: 'ORD-4 | Legnica | 91 szt.', units: 91, lat: 51.207, lng: 16.155, breedUnits: { Leghorn: 35, Stara: 56 } },
+  { id: 'ord-5', label: 'ORD-5 | Opole | 40 szt.', units: 40, lat: 50.6751, lng: 17.9213, breedUnits: { Astra: 20, Sandy: 20 } },
 ];
 
 const weeks = new Map<string, PlanningWeekRecord>();
@@ -153,6 +153,16 @@ function makeStop(orderId: string, sequenceNo: number): RouteStopRecord {
     lng: order.lng,
     status: 'ok',
   };
+}
+
+function escapeCsv(value: string) {
+  if (/[",\n;]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
+  return value;
+}
+
+function toCsvBuffer(rows: string[][]) {
+  const csv = rows.map((row) => row.map((value) => escapeCsv(value)).join(';')).join('\n');
+  return Buffer.from(csv, 'utf-8');
 }
 
 function getDriverPlan(week: PlanningWeekRecord, driverId: string) {
@@ -591,4 +601,129 @@ export function archivePlanningWeek(weekId: string) {
 
 export function resetPlanningState() {
   weeks.clear();
+}
+
+export function exportWeekToExcel(weekId: string) {
+  const details = getPlanningWeek(weekId);
+  const rows: string[][] = [
+    ['Widok tygodnia', details.weekStartDate, '', '', '', '', '', '', '', ''],
+    ['Kierowca', 'Dzień', 'Data', 'Nr stopu', 'OrderId', 'Opis', 'Ilość', 'ETA', 'Status', 'Link trasy'],
+  ];
+
+  for (const plan of details.routePlans) {
+    for (const day of plan.days) {
+      if (day.stops.length === 0) {
+        rows.push([plan.driverName, String(day.day), day.date, '', '', '', '', '', 'brak stopów', plan.externalRouteLink ?? '']);
+        continue;
+      }
+      for (const stop of day.stops) {
+        rows.push([
+          plan.driverName,
+          String(day.day),
+          day.date,
+          String(stop.sequenceNo),
+          stop.orderId,
+          stop.label,
+          String(stop.units),
+          stop.eta,
+          stop.status,
+          plan.externalRouteLink ?? '',
+        ]);
+      }
+    }
+  }
+
+  return toCsvBuffer(rows);
+}
+
+export function exportWeekPerDriver(weekId: string) {
+  const details = getPlanningWeek(weekId);
+  const rows: string[][] = [['Kierowca', 'Dzień', 'Data', 'Liczba stopów', 'Ilość', 'KM', 'Minuty', 'Ostrzeżenia']];
+
+  for (const plan of details.routePlans) {
+    for (const day of plan.days) {
+      rows.push([
+        plan.driverName,
+        String(day.day),
+        day.date,
+        String(day.stops.length),
+        String(day.metrics.units),
+        String(day.metrics.km),
+        String(day.metrics.durationMin),
+        [...day.metrics.warnings, ...day.metrics.conflicts].join(' | '),
+      ]);
+    }
+  }
+  return toCsvBuffer(rows);
+}
+
+export function exportBreedAndGoodsSums(weekId: string) {
+  const details = getPlanningWeek(weekId);
+  const orderIds = new Set(details.routePlans.flatMap((plan) => plan.days.flatMap((day) => day.stops.map((stop) => stop.orderId))));
+  const totals = new Map<string, number>();
+
+  for (const orderId of orderIds) {
+    const order = findOrder(orderId);
+    for (const [breedKey, units] of Object.entries(order.breedUnits)) {
+      totals.set(breedKey, (totals.get(breedKey) ?? 0) + units);
+    }
+  }
+
+  const rows: string[][] = [['Rasa/Towar', 'Suma sztuk'], ...Array.from(totals.entries()).sort((a, b) => a[0].localeCompare(b[0])).map(([breedKey, sum]) => [breedKey, String(sum)])];
+  return toCsvBuffer(rows);
+}
+
+export function exportConflictList(weekId: string) {
+  const details = getPlanningWeek(weekId);
+  const rows: string[][] = [['Kierowca', 'Dzień', 'Data', 'OrderId', 'Stop', 'Status', 'Konflikty/Ostrzeżenia']];
+
+  for (const plan of details.routePlans) {
+    for (const day of plan.days) {
+      const dayAlerts = [...day.metrics.conflicts, ...day.metrics.warnings].join(' | ');
+      for (const stop of day.stops.filter((item) => item.status === 'conflict' || item.status === 'warning')) {
+        rows.push([plan.driverName, String(day.day), day.date, stop.orderId, stop.label, stop.status, dayAlerts]);
+      }
+    }
+  }
+
+  if (rows.length === 1) {
+    rows.push(['', '', '', '', '', 'ok', 'Brak konfliktów']);
+  }
+  return toCsvBuffer(rows);
+}
+
+export function exportRouteLinks(weekId: string) {
+  const details = getPlanningWeek(weekId);
+  const rows: string[][] = [['Kierowca', 'Link trasy', 'Liczba dni z trasą']];
+  for (const plan of details.routePlans) {
+    rows.push([
+      plan.driverName,
+      plan.externalRouteLink ?? '',
+      String(plan.days.filter((day) => day.stops.length > 0).length),
+    ]);
+  }
+  return toCsvBuffer(rows);
+}
+
+export function exportManualChangesReport(weekId: string) {
+  const details = getPlanningWeek(weekId);
+  const rows: string[][] = [
+    ['Zmiany ręczne vs plan automatyczny', details.weekStartDate],
+    ['Metryka', 'Wartość bieżąca', 'Bazowa', 'Delta'],
+    ['KM tygodniowo', String(details.weeklyDiff.current.km), String(details.weeklyDiff.baseline.km), String(details.weeklyDiff.delta.km)],
+    ['Czas tygodniowo (min)', String(details.weeklyDiff.current.durationMin), String(details.weeklyDiff.baseline.durationMin), String(details.weeklyDiff.delta.durationMin)],
+    ['Ilość tygodniowo', String(details.weeklyDiff.current.units), String(details.weeklyDiff.baseline.units), String(details.weeklyDiff.delta.units)],
+    [],
+    ['Historia ręcznych zmian', '', '', ''],
+    ['Data', 'Aktor', 'Akcja', 'Podsumowanie'],
+  ];
+
+  for (const event of details.auditLog) {
+    rows.push([event.createdAt, event.actor, event.actionType, event.summary]);
+  }
+  if (details.auditLog.length === 0) {
+    rows.push(['', '', '', 'Brak ręcznych zmian']);
+  }
+
+  return toCsvBuffer(rows);
 }

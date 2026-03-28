@@ -160,3 +160,37 @@ test('manual dispatcher edits should move, resequence, remove, add and audit cha
   assert.ok(Array.isArray(finalDetails.body.dayDiff));
   assert.ok(Array.isArray(finalDetails.body.weeklyDiff.warnings));
 });
+
+test('planning exports should generate excel-compatible csv files for managers', async () => {
+  const app = createApp();
+  const weekResponse = await request(app).post('/api/planning/weeks').send({ weekStartDate: '2026-03-24' }).expect(201);
+  const weekId = weekResponse.body.id;
+
+  await request(app).post(`/api/planning/weeks/${weekId}/drivers`).send({ driverId: 'drv-1', workDaysCount: 5 }).expect(200);
+  await request(app).put(`/api/planning/weeks/${weekId}/orders`).send({ orderIds: ['ord-1', 'ord-2', 'ord-3'] }).expect(200);
+  await request(app)
+    .post(`/api/planning/weeks/${weekId}/manual-edit`)
+    .send({
+      action: 'UPDATE_EXTERNAL_LINK',
+      actor: 'manager@test',
+      driverId: 'drv-1',
+      externalRouteLink: 'https://maps.example/route/drv-1',
+    })
+    .expect(200);
+
+  const exportEndpoints = [
+    'week',
+    'per-driver',
+    'breed-sums',
+    'conflicts',
+    'route-links',
+    'manual-vs-auto',
+  ];
+
+  for (const endpoint of exportEndpoints) {
+    const response = await request(app).get(`/api/planning/weeks/${weekId}/export/${endpoint}`).expect(200);
+    assert.match(response.headers['content-type'], /text\/csv/);
+    assert.match(response.headers['content-disposition'], /attachment; filename=/);
+    assert.ok(response.text.includes(';') || response.text.includes(','));
+  }
+});

@@ -5,6 +5,12 @@ import {
   archivePlanningWeek,
   assignDriverToWeek,
   createPlanningWeek,
+  exportBreedAndGoodsSums,
+  exportConflictList,
+  exportManualChangesReport,
+  exportRouteLinks,
+  exportWeekPerDriver,
+  exportWeekToExcel,
   getPlanningWeek,
   listPlanningWeeks,
   selectOrdersForWeek,
@@ -110,6 +116,72 @@ router.post('/weeks', (req, res, next) => {
 router.get('/weeks/:weekId', (req, res, next) => {
   try {
     res.json(getPlanningWeek(req.params.weekId));
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/weeks/:weekId/export/week', (req, res, next) => {
+  try {
+    const content = exportWeekToExcel(req.params.weekId);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename=week-${req.params.weekId}.csv`);
+    res.send(content);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/weeks/:weekId/export/per-driver', (req, res, next) => {
+  try {
+    const content = exportWeekPerDriver(req.params.weekId);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename=week-${req.params.weekId}-per-driver.csv`);
+    res.send(content);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/weeks/:weekId/export/breed-sums', (req, res, next) => {
+  try {
+    const content = exportBreedAndGoodsSums(req.params.weekId);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename=week-${req.params.weekId}-breed-sums.csv`);
+    res.send(content);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/weeks/:weekId/export/conflicts', (req, res, next) => {
+  try {
+    const content = exportConflictList(req.params.weekId);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename=week-${req.params.weekId}-conflicts.csv`);
+    res.send(content);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/weeks/:weekId/export/route-links', (req, res, next) => {
+  try {
+    const content = exportRouteLinks(req.params.weekId);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename=week-${req.params.weekId}-route-links.csv`);
+    res.send(content);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/weeks/:weekId/export/manual-vs-auto', (req, res, next) => {
+  try {
+    const content = exportManualChangesReport(req.params.weekId);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename=week-${req.params.weekId}-manual-vs-auto.csv`);
+    res.send(content);
   } catch (error) {
     next(error);
   }
