@@ -1,0 +1,32 @@
+body {
+  margin: 0;
+  font-family: Inter, system-ui, Arial, sans-serif;
+  color: #1f2937;
+}
+
+.layout {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 220px 1fr;
+}
+
+.sidebar {
+  background: #111827;
+  color: #fff;
+  padding: 1rem;
+}
+
+.sidebar nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.sidebar a {
+  color: #bfdbfe;
+  text-decoration: none;
+}
+
+.content {
+  padding: 2rem;
+}
