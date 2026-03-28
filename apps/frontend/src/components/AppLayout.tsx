@@ -10,6 +10,7 @@ export function AppLayout({ children }: PropsWithChildren) {
           <Link to="/">Start</Link>
           <Link to="/app">Aplikacja</Link>
           <Link to="/app/import">Import Excel</Link>
+          <Link to="/app/planning">Planowanie tygodni</Link>
         </nav>
       </aside>
       <main className="content">{children}</main>

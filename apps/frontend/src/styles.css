@@ -71,3 +71,52 @@ body {
   display: flex;
   flex-direction: column;
 }
+
+.planning-create-form {
+  display: flex;
+  gap: 0.75rem;
+  align-items: end;
+  margin-bottom: 1.5rem;
+}
+
+.planning-grid {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  gap: 1.5rem;
+}
+
+.week-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.week-list button {
+  width: 100%;
+  text-align: left;
+  border: 1px solid #d1d5db;
+  background: #fff;
+  padding: 0.5rem;
+}
+
+.week-list .active-week {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.inline-controls {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.order-box {
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  padding: 0.75rem;
+  display: grid;
+  gap: 0.35rem;
+  margin-bottom: 0.5rem;
+}

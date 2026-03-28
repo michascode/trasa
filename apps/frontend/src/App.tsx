@@ -3,6 +3,7 @@ import { AppLayout } from './components/AppLayout';
 import { DashboardPage } from './pages/DashboardPage';
 import { LandingPage } from './pages/LandingPage';
 import { ImportPage } from './pages/ImportPage';
+import { PlanningPage } from './pages/PlanningPage';
 
 export function App() {
   return (
@@ -11,6 +12,7 @@ export function App() {
         <Route path="/" element={<LandingPage />} />
         <Route path="/app" element={<DashboardPage />} />
         <Route path="/app/import" element={<ImportPage />} />
+        <Route path="/app/planning" element={<PlanningPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </AppLayout>
