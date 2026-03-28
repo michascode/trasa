@@ -92,3 +92,71 @@ test('weekly planning workflow should support assignment, transfer, statuses and
   await request(app).post(`/api/planning/weeks/${currentWeekId}/archive`).expect(200);
   await request(app).delete(`/api/planning/weeks/${currentWeekId}/drivers/drv-1`).expect(500);
 });
+
+test('manual dispatcher edits should move, resequence, remove, add and audit changes with diff and warnings', async () => {
+  const app = createApp();
+  const weekResponse = await request(app).post('/api/planning/weeks').send({ weekStartDate: '2026-03-24' }).expect(201);
+  const weekId = weekResponse.body.id;
+
+  await request(app).post(`/api/planning/weeks/${weekId}/drivers`).send({ driverId: 'drv-1', workDaysCount: 5 }).expect(200);
+  await request(app).put(`/api/planning/weeks/${weekId}/orders`).send({ orderIds: ['ord-1', 'ord-2', 'ord-3'] }).expect(200);
+
+  const before = await request(app).get(`/api/planning/weeks/${weekId}`).expect(200);
+  const stop = before.body.routePlans[0].days[0].stops[0];
+
+  await request(app)
+    .post(`/api/planning/weeks/${weekId}/manual-edit`)
+    .send({
+      action: 'RESEQUENCE_STOP',
+      actor: 'manager@test',
+      driverId: 'drv-1',
+      day: 1,
+      stopId: stop.id,
+      toSequence: 1,
+    })
+    .expect(200);
+
+  await request(app)
+    .post(`/api/planning/weeks/${weekId}/manual-edit`)
+    .send({
+      action: 'MOVE_DAY',
+      actor: 'manager@test',
+      driverId: 'drv-1',
+      orderId: stop.orderId,
+      fromDay: 1,
+      toDay: 2,
+    })
+    .expect(200);
+
+  const afterMove = await request(app).get(`/api/planning/weeks/${weekId}`).expect(200);
+  const movedStop = afterMove.body.routePlans[0].days[1].stops.find((entry: { orderId: string }) => entry.orderId === stop.orderId);
+  assert.ok(movedStop);
+
+  await request(app)
+    .post(`/api/planning/weeks/${weekId}/manual-edit`)
+    .send({
+      action: 'REMOVE_STOP',
+      actor: 'manager@test',
+      driverId: 'drv-1',
+      day: 2,
+      stopId: movedStop.id,
+    })
+    .expect(200);
+
+  await request(app)
+    .post(`/api/planning/weeks/${weekId}/manual-edit`)
+    .send({
+      action: 'ADD_STOP',
+      actor: 'manager@test',
+      driverId: 'drv-1',
+      day: 3,
+      orderId: stop.orderId,
+    })
+    .expect(200);
+
+  const finalDetails = await request(app).get(`/api/planning/weeks/${weekId}`).expect(200);
+  assert.ok(finalDetails.body.auditLog.length >= 4);
+  assert.equal(typeof finalDetails.body.weeklyDiff.delta.km, 'number');
+  assert.ok(Array.isArray(finalDetails.body.dayDiff));
+  assert.ok(Array.isArray(finalDetails.body.weeklyDiff.warnings));
+});

@@ -1,8 +1,46 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { DragEvent, FormEvent, useEffect, useMemo, useState } from 'react';
 
 type Driver = { id: string; name: string };
-type Order = { id: string; label: string };
+type Order = { id: string; label: string; units: number; lat: number; lng: number };
 type WeekOrder = { orderId: string; label: string; status: string };
+type RouteStop = {
+  id: string;
+  orderId: string;
+  label: string;
+  sequenceNo: number;
+  units: number;
+  eta: string;
+  lat: number;
+  lng: number;
+  status: 'ok' | 'warning' | 'conflict';
+};
+type RouteDay = {
+  day: number;
+  date: string;
+  stops: RouteStop[];
+  metrics: {
+    km: number;
+    durationMin: number;
+    units: number;
+    warnings: string[];
+    conflicts: string[];
+  };
+};
+type DriverRoutePlan = {
+  driverId: string;
+  driverName: string;
+  color: string;
+  externalRouteLink?: string;
+  days: RouteDay[];
+};
+type AuditEntry = {
+  id: string;
+  actor: string;
+  actionType: string;
+  summary: string;
+  createdAt: string;
+};
+
 type Week = {
   id: string;
   weekStartDate: string;
@@ -11,7 +49,6 @@ type Week = {
   drivers: Array<{ driverId: string; driverName: string; workDaysCount: number }>;
   orders: WeekOrder[];
 };
-
 
 type OptimizerScenario = {
   id: string;
@@ -42,6 +79,29 @@ type WeekDetails = Week & {
   availableOrders: Order[];
   previousWeekId: string | null;
   orderStatusCounts: Record<string, number>;
+  routePlans: DriverRoutePlan[];
+  auditLog: AuditEntry[];
+  weeklyDiff: {
+    current: { km: number; durationMin: number; units: number };
+    baseline: { km: number; durationMin: number; units: number };
+    delta: { km: number; durationMin: number; units: number };
+    warnings: string[];
+  };
+  dayDiff: Array<{
+    day: number;
+    current: { km: number; durationMin: number; units: number };
+    baseline: { km: number; durationMin: number; units: number };
+    delta: { km: number; durationMin: number; units: number };
+    warnings: string[];
+  }>;
+  mapMeta: { availableWeeks: Array<{ id: string; weekStartDate: string }> };
+};
+
+type DragPayload = {
+  orderId: string;
+  stopId: string;
+  fromDriverId: string;
+  fromDay: number;
 };
 
 export function PlanningPage() {
@@ -56,6 +116,12 @@ export function PlanningPage() {
   const [optimizerScenarios, setOptimizerScenarios] = useState<OptimizerScenario[]>([]);
   const [selectedScenarioId, setSelectedScenarioId] = useState<string>('');
   const [optimizationResult, setOptimizationResult] = useState<OptimizationResponse | null>(null);
+  const [activeTab, setActiveTab] = useState<'dispatcher' | 'map' | 'history'>('dispatcher');
+  const [actorName, setActorName] = useState('Kierownik operacyjny');
+  const [newStopOrderId, setNewStopOrderId] = useState('');
+  const [newStopDriverId, setNewStopDriverId] = useState('');
+  const [newStopDay, setNewStopDay] = useState(1);
+  const [statusFilter, setStatusFilter] = useState<'all' | 'ok' | 'warning' | 'conflict'>('all');
 
   async function loadWeeks(preferredWeekId?: string) {
     const response = await fetch('/api/planning/weeks');
@@ -74,6 +140,8 @@ export function PlanningPage() {
     setWeekDetails(details);
     setSelectedDriverId(details.availableDrivers[0]?.id ?? '');
     setSelectedOrders(details.orders.map((order) => order.orderId));
+    setNewStopDriverId(details.routePlans[0]?.driverId ?? details.availableDrivers[0]?.id ?? '');
+    setNewStopOrderId(details.availableOrders[0]?.id ?? '');
   }
 
   async function loadOptimizerScenarios() {
@@ -93,6 +161,17 @@ export function PlanningPage() {
     const previousWeek = weeks.find((week) => week.id === weekDetails.previousWeekId);
     return previousWeek?.orders ?? [];
   }, [weekDetails, weeks]);
+
+  const filteredStops = useMemo(() => {
+    if (!weekDetails) return [];
+    return weekDetails.routePlans.flatMap((driver) =>
+      driver.days.flatMap((day) =>
+        day.stops
+          .filter((stop) => statusFilter === 'all' || stop.status === statusFilter)
+          .map((stop) => ({ driver, day, stop })),
+      ),
+    );
+  }, [weekDetails, statusFilter]);
 
   async function handleCreateWeek(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -162,7 +241,6 @@ export function PlanningPage() {
     await loadWeeks(weekDetails.id);
   }
 
-
   async function runOptimizerScenario() {
     if (!selectedScenarioId) return;
     const scenarioResponse = await fetch(`/api/optimizer/scenarios/${selectedScenarioId}`);
@@ -184,6 +262,80 @@ export function PlanningPage() {
     await loadWeeks(weekDetails.id);
   }
 
+  async function applyManualEdit(payload: Record<string, unknown>) {
+    if (!weekDetails) return;
+    await fetch(`/api/planning/weeks/${weekDetails.id}/manual-edit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    await loadWeekDetails(weekDetails.id);
+  }
+
+  function onStopDragStart(event: DragEvent<HTMLDivElement>, payload: DragPayload) {
+    event.dataTransfer.setData('text/plain', JSON.stringify(payload));
+  }
+
+  function onDropToDay(event: DragEvent<HTMLElement>, toDriverId: string, toDay: number) {
+    event.preventDefault();
+    const raw = event.dataTransfer.getData('text/plain');
+    if (!raw) return;
+    const payload = JSON.parse(raw) as DragPayload;
+
+    if (payload.fromDriverId !== toDriverId) {
+      void applyManualEdit({
+        action: 'MOVE_ORDER',
+        actor: actorName,
+        orderId: payload.orderId,
+        fromDriverId: payload.fromDriverId,
+        fromDay: payload.fromDay,
+        toDriverId,
+        toDay,
+      });
+      return;
+    }
+
+    if (payload.fromDay !== toDay) {
+      void applyManualEdit({
+        action: 'MOVE_DAY',
+        actor: actorName,
+        orderId: payload.orderId,
+        driverId: toDriverId,
+        fromDay: payload.fromDay,
+        toDay,
+      });
+    }
+  }
+
+  function onDropToStop(event: DragEvent<HTMLElement>, driverId: string, day: number, toSequence: number) {
+    event.preventDefault();
+    const raw = event.dataTransfer.getData('text/plain');
+    if (!raw) return;
+    const payload = JSON.parse(raw) as DragPayload;
+    if (payload.fromDriverId === driverId && payload.fromDay === day) {
+      void applyManualEdit({
+        action: 'RESEQUENCE_STOP',
+        actor: actorName,
+        driverId,
+        day,
+        stopId: payload.stopId,
+        toSequence,
+      });
+      return;
+    }
+
+    void applyManualEdit({
+      action: 'MOVE_ORDER',
+      actor: actorName,
+      orderId: payload.orderId,
+      fromDriverId: payload.fromDriverId,
+      fromDay: payload.fromDay,
+      toDriverId: driverId,
+      toDay: day,
+      toSequence,
+    });
+  }
+
   return (
     <section>
       <h1>Planowanie tygodniowe</h1>
@@ -197,57 +349,6 @@ export function PlanningPage() {
       </form>
 
       <div className="planning-grid">
-
-      <article className="optimizer-panel">
-        <h2>Silnik układania tras (VRP)</h2>
-        <p>Przed uruchomieniem optymalizacji widzisz sumę ilości towarów i dni pracy kierowców.</p>
-        <div className="inline-controls">
-          <select value={selectedScenarioId} onChange={(event) => setSelectedScenarioId(event.target.value)}>
-            {optimizerScenarios.map((scenario) => (
-              <option key={scenario.id} value={scenario.id}>
-                {scenario.name}
-              </option>
-            ))}
-          </select>
-          <button type="button" onClick={() => void runOptimizerScenario()} disabled={!selectedScenarioId}>
-            Uruchom optymalizację
-          </button>
-        </div>
-
-        {selectedScenarioId && (
-          <div>
-            {optimizerScenarios
-              .filter((scenario) => scenario.id === selectedScenarioId)
-              .map((scenario) => (
-                <p key={scenario.id}>
-                  Wejście: zamówienia {scenario.precheck.totalOrders}, ładunek {scenario.precheck.totalUnits} j., dni pracy {scenario.precheck.totalWorkDays}.
-                </p>
-              ))}
-          </div>
-        )}
-
-        {optimizationResult && (
-          <div className="optimizer-report">
-            <h3>Raport optymalizacji: {optimizationResult.status}</h3>
-            <p>
-              Suma wejścia: {optimizationResult.report.precheck.totalOrders} zamówień, {optimizationResult.report.precheck.totalUnits} jednostek,
-              tygodniowa pojemność {optimizationResult.report.precheck.totalWeeklyCapacity}.
-            </p>
-            <p>
-              Cel: {optimizationResult.report.objectiveBreakdown.totalKm} km, {optimizationResult.report.objectiveBreakdown.totalDurationMin} min,
-              koszt paliwa {optimizationResult.report.objectiveBreakdown.totalFuelCost} PLN, score {optimizationResult.report.objectiveBreakdown.score}.
-            </p>
-            <p>Niezaplanowane zamówienia: {optimizationResult.report.unassignedOrderIds.join(', ') || 'brak'}.</p>
-            <ul>
-              {optimizationResult.report.conflicts.map((conflict, idx) => (
-                <li key={`${conflict.code}-${idx}`}>
-                  [{conflict.code}] {conflict.reason}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-      </article>
         <article>
           <h2>Lista tygodni</h2>
           <ul className="week-list">
@@ -261,102 +362,358 @@ export function PlanningPage() {
           </ul>
         </article>
 
-        {weekDetails && (
-          <article>
-            <h2>Widok tygodnia: {weekDetails.weekStartDate}</h2>
-            <p>Status tygodnia: <strong>{weekDetails.status}</strong></p>
+        <article>
+          <h2>Zespół i zamówienia tygodnia</h2>
+          <div className="inline-controls">
+            <select value={selectedDriverId} onChange={(event) => setSelectedDriverId(event.target.value)}>
+              {weekDetails?.availableDrivers.map((driver) => (
+                <option key={driver.id} value={driver.id}>
+                  {driver.name}
+                </option>
+              ))}
+            </select>
+            <input type="number" min={1} max={7} value={workDays} onChange={(event) => setWorkDays(Number(event.target.value))} />
+            <button type="button" onClick={() => void assignDriver()}>
+              Dodaj / aktualizuj kierowcę
+            </button>
+            <button type="button" onClick={() => void archiveWeek()} disabled={weekDetails?.status === 'archived'}>
+              Archiwizuj tydzień
+            </button>
+          </div>
 
-            <h3>Przypisanie kierowców</h3>
+          <div className="optimizer-panel">
+            <h3>Silnik układania tras (VRP)</h3>
             <div className="inline-controls">
-              <select value={selectedDriverId} onChange={(event) => setSelectedDriverId(event.target.value)}>
-                {weekDetails.availableDrivers.map((driver) => (
-                  <option key={driver.id} value={driver.id}>{driver.name}</option>
+              <select value={selectedScenarioId} onChange={(event) => setSelectedScenarioId(event.target.value)}>
+                {optimizerScenarios.map((scenario) => (
+                  <option key={scenario.id} value={scenario.id}>
+                    {scenario.name}
+                  </option>
                 ))}
               </select>
-              <input type="number" min={1} max={7} value={workDays} onChange={(event) => setWorkDays(Number(event.target.value))} />
-              <button type="button" onClick={() => void assignDriver()}>Przypisz</button>
+              <button type="button" onClick={() => void runOptimizerScenario()} disabled={!selectedScenarioId}>
+                Uruchom optymalizację
+              </button>
             </div>
-            <ul>
-              {weekDetails.drivers.map((driver) => (
-                <li key={driver.driverId}>
-                  {driver.driverName} — dni pracy: {driver.workDaysCount}
-                  <button type="button" onClick={() => void updateWorkDays(driver.driverId, Math.min(7, driver.workDaysCount + 1))}>+1 dzień</button>
-                  <button type="button" onClick={() => void unassignDriver(driver.driverId)}>Odepnij</button>
-                </li>
-              ))}
-            </ul>
+            {optimizationResult && (
+              <p>
+                Wynik {optimizationResult.status}: {optimizationResult.report.objectiveBreakdown.totalKm} km, {optimizationResult.report.objectiveBreakdown.totalDurationMin} min.
+              </p>
+            )}
+          </div>
 
-            <h3>Wybór zamówień do planowania</h3>
-            <div className="order-box">
-              {weekDetails.availableOrders.map((order) => (
-                <label key={order.id}>
+          <h3>Kierowcy w tygodniu</h3>
+          <ul>
+            {weekDetails?.drivers.map((driver) => (
+              <li key={driver.driverId}>
+                {driver.driverName} ({driver.workDaysCount} dni)
+                <button type="button" onClick={() => void updateWorkDays(driver.driverId, Math.min(7, driver.workDaysCount + 1))}>
+                  +1 dzień
+                </button>
+                <button type="button" onClick={() => void unassignDriver(driver.driverId)}>
+                  Usuń
+                </button>
+              </li>
+            ))}
+          </ul>
+
+          <h3>Zamówienia tygodnia</h3>
+          <div className="inline-controls">
+            <button type="button" onClick={() => void saveOrderSelection()}>
+              Zapisz wybór zamówień
+            </button>
+            <button type="button" onClick={() => void moveOrdersFromPreviousWeek()} disabled={transferOrders.length === 0}>
+              Przenieś z poprzedniego tygodnia
+            </button>
+          </div>
+          <div className="order-picker-grid">
+            {weekDetails?.availableOrders.map((order) => (
+              <label key={order.id} className="order-box">
+                <input
+                  type="checkbox"
+                  checked={selectedOrders.includes(order.id)}
+                  onChange={(event) => {
+                    setSelectedOrders((prev) => (event.target.checked ? [...prev, order.id] : prev.filter((id) => id !== order.id)));
+                  }}
+                />
+                {order.label}
+              </label>
+            ))}
+          </div>
+          <div className="order-picker-grid">
+            {weekDetails?.orders.map((order) => (
+              <label key={order.orderId} className="order-box">
+                <strong>{order.label}</strong>
+                <select value={order.status} onChange={(event) => void updateOrderStatus(order.orderId, event.target.value)}>
+                  <option value="unassigned">unassigned</option>
+                  <option value="planned">planned</option>
+                  <option value="conflict">conflict</option>
+                  <option value="moved">moved</option>
+                  <option value="skipped">skipped</option>
+                </select>
+                {previousWeekOrders.some((item) => item.orderId === order.orderId) && (
                   <input
                     type="checkbox"
-                    checked={selectedOrders.includes(order.id)}
+                    checked={transferOrders.includes(order.orderId)}
                     onChange={(event) => {
-                      setSelectedOrders((current) =>
-                        event.target.checked ? [...current, order.id] : current.filter((item) => item !== order.id),
+                      setTransferOrders((prev) =>
+                        event.target.checked ? [...prev, order.orderId] : prev.filter((id) => id !== order.orderId),
                       );
                     }}
                   />
-                  {order.label}
-                </label>
+                )}
+              </label>
+            ))}
+          </div>
+
+          <h2>Ręczna dyspozytornia</h2>
+          <div className="inline-controls">
+            <button type="button" onClick={() => setActiveTab('dispatcher')} className={activeTab === 'dispatcher' ? 'tab-active' : ''}>
+              Edycja tras
+            </button>
+            <button type="button" onClick={() => setActiveTab('map')} className={activeTab === 'map' ? 'tab-active' : ''}>
+              Mapa tygodnia
+            </button>
+            <button type="button" onClick={() => setActiveTab('history')} className={activeTab === 'history' ? 'tab-active' : ''}>
+              Historia i porównanie
+            </button>
+            <input value={actorName} onChange={(event) => setActorName(event.target.value)} placeholder="Kto edytuje" />
+          </div>
+
+          {weekDetails && activeTab === 'dispatcher' && (
+            <div>
+              <div className="diff-card">
+                <strong>Tydzień: różnica do planu auto</strong>
+                <p>
+                  km Δ {weekDetails.weeklyDiff.delta.km}, min Δ {weekDetails.weeklyDiff.delta.durationMin}, jednostki Δ {weekDetails.weeklyDiff.delta.units}
+                </p>
+                {weekDetails.weeklyDiff.warnings.length > 0 && <p className="error">Ostrzeżenia: {weekDetails.weeklyDiff.warnings.join(' | ')}</p>}
+              </div>
+
+              <div className="inline-controls">
+                <select value={newStopOrderId} onChange={(event) => setNewStopOrderId(event.target.value)}>
+                  {weekDetails.availableOrders.map((order) => (
+                    <option key={order.id} value={order.id}>
+                      {order.label}
+                    </option>
+                  ))}
+                </select>
+                <select value={newStopDriverId} onChange={(event) => setNewStopDriverId(event.target.value)}>
+                  {weekDetails.routePlans.map((driver) => (
+                    <option key={driver.driverId} value={driver.driverId}>
+                      {driver.driverName}
+                    </option>
+                  ))}
+                </select>
+                <input type="number" min={1} max={7} value={newStopDay} onChange={(event) => setNewStopDay(Number(event.target.value))} />
+                <button
+                  type="button"
+                  onClick={() =>
+                    void applyManualEdit({ action: 'ADD_STOP', actor: actorName, driverId: newStopDriverId, day: newStopDay, orderId: newStopOrderId })
+                  }
+                >
+                  Dodaj stop
+                </button>
+              </div>
+
+              {weekDetails.routePlans.map((driver) => (
+                <section key={driver.driverId} className="driver-board">
+                  <header className="driver-head" style={{ borderLeftColor: driver.color }}>
+                    <h3>{driver.driverName}</h3>
+                    <input
+                      value={driver.externalRouteLink ?? ''}
+                      placeholder="https://zewnetrzny-link-trasy"
+                      onBlur={(event) => {
+                        const value = event.target.value.trim();
+                        if (!value) return;
+                        void applyManualEdit({
+                          action: 'UPDATE_EXTERNAL_LINK',
+                          actor: actorName,
+                          driverId: driver.driverId,
+                          externalRouteLink: value,
+                        });
+                      }}
+                    />
+                    {driver.externalRouteLink && (
+                      <a href={driver.externalRouteLink} target="_blank" rel="noreferrer">
+                        Otwórz link zewnętrzny
+                      </a>
+                    )}
+                  </header>
+                  <div className="day-grid">
+                    {driver.days.map((day) => (
+                      <article
+                        key={`${driver.driverId}-${day.day}`}
+                        className="day-column"
+                        onDragOver={(event) => event.preventDefault()}
+                        onDrop={(event) => onDropToDay(event, driver.driverId, day.day)}
+                      >
+                        <h4>
+                          Dzień {day.day} ({day.date})
+                        </h4>
+                        <small>
+                          {day.metrics.km} km · {day.metrics.durationMin} min · {day.metrics.units} j.
+                        </small>
+                        {day.metrics.warnings.concat(day.metrics.conflicts).map((warning, idx) => (
+                          <p key={idx} className="error">
+                            {warning}
+                          </p>
+                        ))}
+                        <div>
+                          {day.stops.map((stop) => (
+                            <div
+                              key={stop.id}
+                              draggable
+                              className={`stop-card stop-${stop.status}`}
+                              onDragStart={(event) => onStopDragStart(event, { orderId: stop.orderId, stopId: stop.id, fromDriverId: driver.driverId, fromDay: day.day })}
+                              onDragOver={(event) => event.preventDefault()}
+                              onDrop={(event) => onDropToStop(event, driver.driverId, day.day, stop.sequenceNo)}
+                            >
+                              <strong>
+                                #{stop.sequenceNo} {stop.label}
+                              </strong>
+                              <small>
+                                ETA {stop.eta} · {stop.units} j.
+                              </small>
+                              <div className="inline-controls">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    void applyManualEdit({
+                                      action: 'RESEQUENCE_STOP',
+                                      actor: actorName,
+                                      driverId: driver.driverId,
+                                      day: day.day,
+                                      stopId: stop.id,
+                                      toSequence: Math.max(1, stop.sequenceNo - 1),
+                                    })
+                                  }
+                                >
+                                  ↑
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    void applyManualEdit({
+                                      action: 'RESEQUENCE_STOP',
+                                      actor: actorName,
+                                      driverId: driver.driverId,
+                                      day: day.day,
+                                      stopId: stop.id,
+                                      toSequence: stop.sequenceNo + 1,
+                                    })
+                                  }
+                                >
+                                  ↓
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    void applyManualEdit({
+                                      action: 'REMOVE_STOP',
+                                      actor: actorName,
+                                      driverId: driver.driverId,
+                                      day: day.day,
+                                      stopId: stop.id,
+                                    })
+                                  }
+                                >
+                                  Usuń
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </section>
               ))}
             </div>
-            <button type="button" onClick={() => void saveOrderSelection()}>Zapisz wybór zamówień</button>
+          )}
 
-            <h3>Statusy zamówień</h3>
-            <p>
-              nieprzypisane: {weekDetails.orderStatusCounts.unassigned} | zaplanowane: {weekDetails.orderStatusCounts.planned} |
-              konfliktowe: {weekDetails.orderStatusCounts.conflict} | przeniesione: {weekDetails.orderStatusCounts.moved} |
-              pominięte: {weekDetails.orderStatusCounts.skipped}
-            </p>
-            <ul>
-              {weekDetails.orders.map((order) => (
-                <li key={order.orderId}>
-                  {order.label} — <strong>{order.status}</strong>
-                  <select value={order.status} onChange={(event) => void updateOrderStatus(order.orderId, event.target.value)}>
-                    <option value="unassigned">nieprzypisane</option>
-                    <option value="planned">zaplanowane</option>
-                    <option value="conflict">konfliktowe</option>
-                    <option value="moved">przeniesione</option>
-                    <option value="skipped">pominięte</option>
+          {weekDetails && activeTab === 'map' && (
+            <section>
+              <div className="inline-controls">
+                <label>
+                  Filtr statusu
+                  <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}>
+                    <option value="all">Wszystkie</option>
+                    <option value="ok">OK</option>
+                    <option value="warning">Warning</option>
+                    <option value="conflict">Conflict</option>
                   </select>
-                </li>
-              ))}
-            </ul>
+                </label>
+              </div>
+              <div className="map-canvas">
+                {filteredStops.map(({ driver, day, stop }) => (
+                  <button key={stop.id} className="map-point" style={{ left: `${15 + stop.lng % 20}%`, top: `${15 + stop.lat % 60}%`, borderColor: driver.color }}>
+                    {day.day}
+                    <span className="map-popup">
+                      <strong>{stop.label}</strong>
+                      <br />
+                      Kierowca: {driver.driverName}
+                      <br />
+                      Dzień: {day.day}
+                      <br />
+                      Status: {stop.status}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <p>Kolory reprezentują kierowców, numer przy punkcie to dzień trasy. Punkty i polilinie są uproszczone do widoku operacyjnego.</p>
+            </section>
+          )}
 
-            <h3>Przenoszenie zamówień z poprzedniego tygodnia</h3>
-            {weekDetails.previousWeekId ? (
-              <>
-                <div className="order-box">
-                  {previousWeekOrders.map((order) => (
-                    <label key={order.orderId}>
-                      <input
-                        type="checkbox"
-                        checked={transferOrders.includes(order.orderId)}
-                        onChange={(event) => {
-                          setTransferOrders((current) =>
-                            event.target.checked ? [...current, order.orderId] : current.filter((item) => item !== order.orderId),
-                          );
-                        }}
-                      />
-                      {order.label} ({order.status})
-                    </label>
+          {weekDetails && activeTab === 'history' && (
+            <section>
+              <h3>Historia zmian ręcznych (pełny audyt)</h3>
+              <ul className="audit-list">
+                {weekDetails.auditLog.map((entry) => (
+                  <li key={entry.id}>
+                    <strong>{entry.actor}</strong> [{entry.actionType}] {entry.summary} <small>{new Date(entry.createdAt).toLocaleString()}</small>
+                  </li>
+                ))}
+              </ul>
+
+              <h3>Porównanie tygodni</h3>
+              <div className="inline-controls">
+                <label>
+                  Tydzień do podglądu
+                  <select value={selectedWeekId} onChange={(event) => void loadWeekDetails(event.target.value)}>
+                    {weekDetails.mapMeta.availableWeeks.map((week) => (
+                      <option key={week.id} value={week.id}>
+                        {week.weekStartDate}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <table className="import-table">
+                <thead>
+                  <tr>
+                    <th>Dzień</th>
+                    <th>Aktualny km</th>
+                    <th>Auto km</th>
+                    <th>Delta km</th>
+                    <th>Ostrzeżenia</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {weekDetails.dayDiff.map((diff) => (
+                    <tr key={diff.day}>
+                      <td>{diff.day}</td>
+                      <td>{diff.current.km}</td>
+                      <td>{diff.baseline.km}</td>
+                      <td>{diff.delta.km}</td>
+                      <td>{diff.warnings.join(', ') || 'brak'}</td>
+                    </tr>
                   ))}
-                </div>
-                <button type="button" onClick={() => void moveOrdersFromPreviousWeek()}>Przenieś do bieżącego tygodnia</button>
-              </>
-            ) : (
-              <p>Brak poprzedniego tygodnia.</p>
-            )}
-
-            <h3>Archiwum</h3>
-            <button type="button" onClick={() => void archiveWeek()} disabled={weekDetails.status === 'archived'}>
-              Zatwierdź i zablokuj tydzień
-            </button>
-          </article>
-        )}
+                </tbody>
+              </table>
+            </section>
+          )}
+        </article>
       </div>
     </section>
   );
