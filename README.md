@@ -34,13 +34,6 @@ Kluczowe zmienne backendu:
 
 ## 4) Dokładna instrukcja uruchomienia lokalnego
 
-Najpierw utwórz pliki `.env` (to kluczowe dla Prisma):
-
-```bash
-cp apps/backend/.env.example apps/backend/.env
-cp apps/frontend/.env.example apps/frontend/.env
-```
-
 ```bash
 npm install
 npm run db:migrate:dev --workspace @trasa/backend
@@ -58,12 +51,6 @@ Szybki smoke test:
 curl http://localhost:4000/api/health
 curl http://localhost:4000/api/audit/events?limit=5
 ```
-
-### Troubleshooting (Windows / brak DATABASE_URL)
-
-- Jeśli zobaczysz `Environment variable not found: DATABASE_URL`, sprawdź czy istnieje `apps/backend/.env`.
-- Komendy Prisma mają teraz fallback na lokalny DB URL (`postgresql://postgres:postgres@localhost:5432/trasa?schema=public`) i wyświetlą ostrzeżenie, gdy `DATABASE_URL` nie jest ustawione.
-- `db:seed` uruchamia automatycznie `db:generate`, żeby uniknąć błędów typu `@prisma/client does not provide an export named ...`.
 
 ## 5) Uruchomienie przez Docker Compose
 
