@@ -168,6 +168,7 @@ model PlanningWeek {
   driverAvailability DriverWeeklyAvailability[]
   importBatches     OrderImportBatch[]
   ordersCurrent     Order[]                 @relation("OrderCurrentPlanningWeek")
+  weekAssignments   OrderWeekAssignment[]
   routePlans        RoutePlan[]
 
   @@unique([weekStartDate, version])
@@ -343,6 +344,7 @@ model RouteDay {
 
   routePlan RoutePlan  @relation(fields: [routePlanId], references: [id], onDelete: Cascade)
   stops     RouteStop[]
+  manualEdits RouteManualEditLog[]
 
   @@unique([routePlanId, dayIndex])
   @@unique([routePlanId, serviceDate])
