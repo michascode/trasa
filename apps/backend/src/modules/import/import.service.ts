@@ -4,8 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { Prisma, RawImportRowStatus, ImportBatchStatus } from '@prisma/client';
+import type { Prisma } from '@prisma/client';
 import { prisma } from '../../db/prisma.js';
+import { pushAuditEvent } from '../observability/audit-trail.js';
 import { parseRawOrderText, SUPPORTED_PATTERNS } from './import.parser.js';
 import type { ExcelImportRow, ImportIssue, ParserMetadata } from './import.types.js';
 
@@ -122,23 +123,72 @@ export async function importOrdersFromExcel(fileBuffer: Buffer, sourceFilename: 
     parsedRows.push(row);
   });
 
+  if (parsedRows.length === 0) {
+    throw new Error('Import nie zawiera żadnych zamówień do przetworzenia.');
+  }
+
   const batch = await prisma.$transaction(async (tx) => {
-    const created = await tx.orderImportBatch.create({ data: { planningWeekId: boundPlanningWeekId, sourceFilename, sourceHash, totalRows: parsedRows.length, status: ImportBatchStatus.PARSED } });
+    const created = await tx.orderImportBatch.create({ data: { planningWeekId: boundPlanningWeekId, sourceFilename, sourceHash, totalRows: parsedRows.length, status: 'PARSED' } });
     let successRows = 0; let errorRows = 0;
     for (const row of parsedRows) {
       const hasError = row.issues.some((issue) => issue.severity === 'error');
-      const status = hasError ? RawImportRowStatus.ERROR : row.issues.length ? RawImportRowStatus.WARNING : RawImportRowStatus.OK;
+      const status = hasError ? 'ERROR' : row.issues.length ? 'WARNING' : 'OK';
       if (hasError) errorRows += 1; else successRows += 1;
       const order = await tx.order.create({ data: { currentPlanningWeekId: boundPlanningWeekId, rawOrderText: row.rawOrderText, postalCode: row.parsed.postalCode, addressLine: row.parsed.addressLine, phone: row.parsed.phone, notes: row.parsed.notes, orderedGoodsText: row.parsed.orderedGoodsText, numberingText: row.parsed.numberingText, orderItems: { create: row.parsed.items.map((item) => ({ canonicalBreedKey: item.canonicalBreedKey, sourceLabel: item.sourceAlias, units: item.units, breedAliasId: aliases.find((a) => a.alias.toLowerCase() === item.sourceAlias)?.id })) }, weekAssignments: { create: { planningWeekId: boundPlanningWeekId, isCurrent: true, transferReason: 'Excel import' } } } });
       await tx.rawImportedOrderRow.create({ data: { importBatchId: created.id, rowNumber: row.rowNumber, rawCellsJson: row.rawCells as Prisma.InputJsonValue, rawOrderText: row.rawOrderText, parseStatus: status, parseErrorsJson: row.issues as unknown as Prisma.InputJsonValue, normalizedOrderId: order.id } });
     }
-    return tx.orderImportBatch.update({ where: { id: created.id }, data: { successRows, errorRows, status: errorRows > 0 ? ImportBatchStatus.FAILED : ImportBatchStatus.VALIDATED }, include: { rawRows: { include: { normalizedOrder: { include: { orderItems: true } } }, orderBy: { rowNumber: 'asc' } } } });
+    return tx.orderImportBatch.update({ where: { id: created.id }, data: { successRows, errorRows, status: errorRows > 0 ? 'FAILED' : 'VALIDATED' }, include: { rawRows: { include: { normalizedOrder: { include: { orderItems: true } } }, orderBy: { rowNumber: 'asc' } } } });
+  });
+  pushAuditEvent({
+    action: 'IMPORT_UPLOAD',
+    status: batch.errorRows > 0 ? 'failure' : 'success',
+    resource: `import-batch:${batch.id}`,
+    details: {
+      sourceFilename,
+      totalRows: batch.totalRows,
+      successRows: batch.successRows,
+      errorRows: batch.errorRows,
+    },
   });
   return { reused: false, batch };
 }
 
 export async function getBatchPreview(batchId: string) { return prisma.orderImportBatch.findUnique({ where: { id: batchId }, include: { rawRows: { include: { normalizedOrder: { include: { orderItems: true } } }, orderBy: { rowNumber: 'asc' } } } }); }
-export async function correctImportedRow(rowId: string, payload: { addressLine?: string; phone?: string; notes?: string; orderedGoodsText?: string; numberingText?: string; correctionNotes?: string }) { const row = await prisma.rawImportedOrderRow.findUniqueOrThrow({ where: { id: rowId } }); if (!row.normalizedOrderId) throw new Error('Wiersz nie jest powiązany z zamówieniem.'); const order = await prisma.order.update({ where: { id: row.normalizedOrderId }, data: { addressLine: payload.addressLine, phone: payload.phone, notes: payload.notes, orderedGoodsText: payload.orderedGoodsText, numberingText: payload.numberingText } }); await prisma.rawImportedOrderRow.update({ where: { id: rowId }, data: { parseStatus: RawImportRowStatus.CORRECTED, correctionNotes: payload.correctionNotes, parseErrorsJson: [] as unknown as Prisma.InputJsonValue } }); return order; }
+export async function correctImportedRow(
+  rowId: string,
+  payload: { addressLine?: string; phone?: string; notes?: string; orderedGoodsText?: string; numberingText?: string; correctionNotes?: string },
+) {
+  const row = await prisma.rawImportedOrderRow.findUniqueOrThrow({ where: { id: rowId } });
+  if (!row.normalizedOrderId) throw new Error('Wiersz nie jest powiązany z zamówieniem.');
+
+  const order = await prisma.order.update({
+    where: { id: row.normalizedOrderId },
+    data: {
+      addressLine: payload.addressLine,
+      phone: payload.phone,
+      notes: payload.notes,
+      orderedGoodsText: payload.orderedGoodsText,
+      numberingText: payload.numberingText,
+    },
+  });
+
+  await prisma.rawImportedOrderRow.update({
+    where: { id: rowId },
+    data: {
+      parseStatus: 'CORRECTED',
+      correctionNotes: payload.correctionNotes,
+      parseErrorsJson: [] as unknown as Prisma.InputJsonValue,
+    },
+  });
+
+  pushAuditEvent({
+    action: 'IMPORT_CORRECTION',
+    status: 'success',
+    resource: `import-row:${rowId}`,
+    details: { correctionNotes: payload.correctionNotes ?? null },
+  });
+  return order;
+}
 
 function escapeCsv(value: string) { if (/[",\n;]/.test(value)) return `"${value.replace(/"/g, '""')}"`; return value; }
 
