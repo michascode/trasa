@@ -2,8 +2,8 @@ import type { ParsedItem, ParsedOrder } from './import.types.js';
 
 const POSTAL_CODE_REGEX = /\b\d{2}-\d{3}\b/;
 const PHONE_REGEX = /(?:\+48\s*)?(\d{3})[\s-]?(\d{3})[\s-]?(\d{3})\b/;
-const ITEM_SLASH_REGEX = /(\d+)\s*\/\s*(\d+)\s*([a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ]+)/g;
-const ITEM_SIMPLE_REGEX = /(\d+)\s+([a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ]+)/g;
+const ITEM_SLASH_REGEX = /(?:^|\s)(\d+)\s*\/\s*(\d+)\s*([a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ]+)/g;
+const ITEM_SIMPLE_REGEX = /(?:^|\s)(\d+)\s+([a-zA-ZąćęłńóśźżĄĆĘŁŃÓŚŹŻ]+)/g;
 
 const normalizeAlias = (value: string) =>
   value
@@ -25,6 +25,9 @@ export function parseRawOrderText(
   const phone = fallbackFields?.phone ?? (phoneMatch ? `${phoneMatch[1]}${phoneMatch[2]}${phoneMatch[3]}` : null);
 
   const beforePhone = phoneMatch ? mainText.slice(0, phoneMatch.index).trim() : mainText;
+  const itemsSourceText = phoneMatch
+    ? mainText.slice((phoneMatch.index ?? 0) + phoneMatch[0].length).trim()
+    : mainText;
   const addressCandidate = postalCode
     ? beforePhone.replace(postalCode, '').trim()
     : beforePhone;
@@ -32,7 +35,7 @@ export function parseRawOrderText(
   const parsedItems: ParsedItem[] = [];
   const unknownAliases = new Set<string>();
 
-  for (const match of mainText.matchAll(ITEM_SLASH_REGEX)) {
+  for (const match of itemsSourceText.matchAll(ITEM_SLASH_REGEX)) {
     const units = Number(match[1]);
     const rawAlias = normalizeAlias(match[3]);
     const canonical = aliasMap.get(rawAlias);
@@ -40,17 +43,19 @@ export function parseRawOrderText(
       unknownAliases.add(rawAlias);
       continue;
     }
+    const sourceText = match[0].trim();
     parsedItems.push({
       canonicalBreedKey: canonical,
       sourceAlias: rawAlias,
       units,
-      sourceText: match[0],
+      sourceText,
     });
   }
 
   const covered = new Set(parsedItems.map((item) => item.sourceText));
-  for (const match of mainText.matchAll(ITEM_SIMPLE_REGEX)) {
-    if (covered.has(match[0])) {
+  for (const match of itemsSourceText.matchAll(ITEM_SIMPLE_REGEX)) {
+    const sourceText = match[0].trim();
+    if (covered.has(sourceText)) {
       continue;
     }
     const units = Number(match[1]);
@@ -64,7 +69,7 @@ export function parseRawOrderText(
       canonicalBreedKey: canonical,
       sourceAlias: rawAlias,
       units,
-      sourceText: match[0],
+      sourceText,
     });
   }
 

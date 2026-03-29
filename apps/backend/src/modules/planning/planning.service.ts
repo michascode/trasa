@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { pushAuditEvent } from '../observability/audit-trail.js';
 import type {
   DriverRoutePlanRecord,
   ManualEditAuditRecord,
@@ -589,6 +590,13 @@ export function applyManualEdit(weekId: string, payload: ManualEditPayload) {
   }
 
   recalculateWeek(week);
+  pushAuditEvent({
+    action: 'PLANNING_MANUAL_EDIT',
+    status: 'success',
+    actor: payload.actor,
+    resource: `planning-week:${weekId}`,
+    details: { action: payload.action },
+  });
   return getPlanningWeek(weekId);
 }
 
